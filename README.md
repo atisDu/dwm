@@ -1,2 +1,0 @@
-# dwm
-Mans dwm būvējums.
