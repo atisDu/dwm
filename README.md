@@ -1,2 +1,2 @@
 # dwm
-Mand dwm būvējums.
+Mans dwm būvējums.
