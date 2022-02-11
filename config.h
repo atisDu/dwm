@@ -2,7 +2,7 @@
 
 /* appearance */
 static const unsigned int borderpx  = 1;        /* border pixel of windows */
-static const unsigned int snap      = 32;       /* snap pixel */
+static const unsigned int snap      = 22;       /* snap pixel */
 static const unsigned int systraypinning = 0;   /* 0: sloppy systray follows selected monitor, >0: pin systray to monitor X */
 static const unsigned int systrayonleft = 1;   	/* 0: systray in the right corner, >0: systray on left of status text */
 static const unsigned int systrayspacing = 2;   /* systray spacing */
@@ -13,10 +13,10 @@ static const int showbar            = 1;        /* 0 means no bar */
 static const int topbar             = 1;        /* 0 means bottom bar */
 static const char *fonts[]          = { "Fantasque Sans Mono:size=16" };
 static const char dmenufont[]       = "Fantasque Sans Mono:size=16";
-static const char col_gray1[]       = "#1d1f21";
+static const char col_gray1[]       = "#1d1f21";	     /*    "#1d1f21"; */
 static const char col_gray2[]       = "#444444";
-static const char col_gray3[]       = "#bbbbbb";
-static const char col_gray4[]       = "#eeeeee";
+static const char col_gray3[]       = "#bf9d6b";             /* "#bbbbbb"; */
+static const char col_gray4[]       = "#9b7859";	     /* "#eeeeee"; */
 /*static const char col_cyan[]        = "#4c566a";*/
 static const char col_cyan[]	    = "#1D4D3F";
 
@@ -35,7 +35,8 @@ static const Rule rules[] = {
 	 *	WM_NAME(STRING) = title
 	 */
 	/* class      instance    title       tags mask     isfloating   monitor */
-	{ "Gimp",     NULL,       NULL,       0,            1,           -1 },
+	{ "Gimp",     NULL,       NULL,       0,            0,           -1 },
+	{ "Origin",   NULL,       NULL,       0,            1,           -1 },
 	};
 
 /* layout(s) */
@@ -72,7 +73,9 @@ static const char *voldowncmd[] = { "pactl", "set-sink-volume", "@DEFAULT_SINK@"
 static const char *mutemiccmd[] = { "pactl", "set-source-mute", "@DEFAULT_SOURCE@", "toggle", NULL };
 static const char *brupcmd[] = { "brightnessctl", "set", "5%+", NULL };
 static const char *brdowncmd[] = { "brightnessctl", "set", "5%-", NULL };
-
+static const char *screenshotfull[] = { "flameshot", "screen", " -p", "/home/atis/Attēli/", NULL};
+static const char *screenshotsel[] = {"flameshot", "gui", "-p", "/home/atis/Attēli", NULL };
+static const char *webcmd[] = { "firefox-bin", NULL};
 #include <X11/XF86keysym.h>
 
 static Key keys[] = {
@@ -110,12 +113,15 @@ static Key keys[] = {
 	TAGKEYS(                        XK_8,                      7)
 	TAGKEYS(                        XK_9,                      8)
 	{ MODKEY|ShiftMask,             XK_c,      quit,           {0} },
-	{ 0, 				XK_F1, 	   spawn,   	   {.v = mutecmd } },
+	{ MODKEY,			XK_a,	   spawn,	   {.v = webcmd } },
+/*	{ 0, 				XK_F1, 	   spawn,   	   {.v = mutecmd } },
 	{ 0, 				XK_F2, 	   spawn, 	   {.v = voldowncmd } },
 	{ 0, 				XK_F3, 	   spawn, 	   {.v = volupcmd } },
 	{ 0, 				XK_F6, 	   spawn, 	   {.v = brupcmd} },
 	{ 0, 				XK_F5, 	   spawn, 	   {.v = brdowncmd} },
-	{ 0,                            XK_F4, 	   spawn,   	   {.v = mutemiccmd } },
+	{ 0,                            XK_F4, 	   spawn,   	   {.v = mutemiccmd } }, */
+	{ 0,				XK_Print,  spawn,	   {.v = screenshotfull} },
+	{ MODKEY,			XK_p,	   spawn,	   {.v = screenshotsel} },  				
 };
 
 /* button definitions */
