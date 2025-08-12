@@ -1,7 +1,8 @@
 /* See LICENSE file for copyright and license details. */
 
 /* appearance */
-static const unsigned int borderpx  = 15;        /* border pixel of windows */
+//#include <cstddef>
+static const unsigned int borderpx  = 5;        /* border pixel of windows */
 static const unsigned int snap      = 22;       /* snap pixel */
 static const unsigned int systraypinning = 0;   /* 0: sloppy systray follows selected monitor, >0: pin systray to monitor X */
 static const unsigned int systrayonleft = 1;   	/* 0: systray in the right corner, >0: systray on left of status text */
@@ -11,8 +12,8 @@ static const int showsystray        = 1;     /* 0 means no systray */
 
 static const int showbar            = 1;        /* 0 means no bar */
 static const int topbar             = 1;        /* 0 means bottom bar */
-static const char *fonts[]          = { "Fantasque Sans Mono:size=16" };
-static const char dmenufont[]       = "Fantasque Sans Mono:size=16";
+static const char *fonts[]          = { "Fantasque Sans Mono:pixelsize=27" };
+static const char dmenufont[]       = "Fantasque Sans Mono:pixelsize=27";
 static const char col_gray1[]       = "#1d1f21";	     /*    "#1d1f21"; */
 static const char col_gray2[]       = "#444444";
 static const char col_gray3[]       = "#eeeeee";             /* "#bbbbbb"; */
@@ -27,7 +28,7 @@ static const char *colors[][3]      = {
 };
 
 /* tagging */
-static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+static const char *tags[] = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX" };
 
 static const Rule rules[] = {
 	/* xprop(1):
@@ -37,7 +38,8 @@ static const Rule rules[] = {
 	/* class      instance    title       tags mask     isfloating   monitor */
 	{ "Gimp",     NULL,       NULL,       0,            0,           -1 },
 	{ "Origin",   NULL,       NULL,       0,            1,           -1 },
-	};
+    { "Onboard",  NULL,       NULL,       0,            1.           -1 },
+    };
 
 /* layout(s) */
 static const float mfact     = 0.55; /* factor of master area size [0.05..0.95] */
@@ -47,7 +49,7 @@ static const int lockfullscreen = 1; /* 1 will force focus on the fullscreen win
 
 static const Layout layouts[] = {
 	/* symbol     arrange function */
-	{ "Flīze",      tile },    /* first entry is default */
+	{ "Režģis",      tile },    /* first entry is default */
 	{ "Peld*",      NULL },    /* no layout function means floating behavior */
 	{ "[M]",      monocle },
 };
@@ -67,15 +69,17 @@ static const Layout layouts[] = {
 static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() */
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]  = { "st", NULL };
-/* static const char *mutecmd[] = { "pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle", NULL };
+static const char *mutecmd[] = { "pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle", NULL };
 static const char *volupcmd[] = { "pactl", "set-sink-volume", "@DEFAULT_SINK@", "+5%", NULL };
 static const char *voldowncmd[] = { "pactl", "set-sink-volume", "@DEFAULT_SINK@", "-5%", NULL };
 static const char *mutemiccmd[] = { "pactl", "set-source-mute", "@DEFAULT_SOURCE@", "toggle", NULL };
-static const char *brupcmd[] = { "brightnessctl", "set", "5%+", NULL };
-static const char *brdowncmd[] = { "brightnessctl", "set", "5%-", NULL }; */
+
+static const char *brupcmd[] = { "/home/atis/gaisma", "augs", NULL };
+static const char *brdowncmd[] = { "/home/atis/gaisma", "dils", NULL }; 
 static const char *screenshotfull[] = { "flameshot", "screen", " -p", "/home/atis/Attēli/", NULL};
 static const char *screenshotsel[] = {"flameshot", "gui", "-p", "/home/atis/Attēli", NULL };
-static const char *webcmd[] = { "firefox", NULL};
+static const char *webcmd[] = { "zen-browser", NULL};
+static const char *obscmd[] = { "obsidian", NULL};
 #include <X11/XF86keysym.h>
 
 static Key keys[] = {
@@ -114,12 +118,13 @@ static Key keys[] = {
 	TAGKEYS(                        XK_9,                      8)
 	{ MODKEY|ShiftMask,             XK_c,      quit,           {0} },
 	{ MODKEY,			XK_a,	   spawn,	   {.v = webcmd } },
-/*	{ 0, 				XK_F1, 	   spawn,   	   {.v = mutecmd } },
-	{ 0, 				XK_F2, 	   spawn, 	   {.v = voldowncmd } },
-	{ 0, 				XK_F3, 	   spawn, 	   {.v = volupcmd } },
-	{ 0, 				XK_F6, 	   spawn, 	   {.v = brupcmd} },
-	{ 0, 				XK_F5, 	   spawn, 	   {.v = brdowncmd} },
-	{ 0,                            XK_F4, 	   spawn,   	   {.v = mutemiccmd } }, */
+    { MODKEY,			XK_w,	   spawn,	   {.v = obscmd } },
+ 	{ 0, 				XF86XK_AudioMute, 	   spawn,   	   {.v = mutecmd } },
+	{ 0, 				XF86XK_AudioLowerVolume, 	   spawn, 	   {.v = voldowncmd } },
+	{ 0, 				XF86XK_AudioRaiseVolume, 	   spawn, 	   {.v = volupcmd } },
+	{ 0, 				XF86XK_MonBrightnessUp, 	   spawn, 	   {.v = brupcmd} },
+	{ 0, 				XF86XK_MonBrightnessDown, 	   spawn, 	   {.v = brdowncmd} },
+	{ 0,                            XK_F4, 	   spawn,   	   {.v = mutemiccmd } }, 
 	{ 0,				XK_Print,  spawn,	   {.v = screenshotfull} },
 	{ MODKEY,			XK_p,	   spawn,	   {.v = screenshotsel} },  				
 };
