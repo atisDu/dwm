@@ -1,0 +1,46 @@
+#!/bin/sh
+BLANK='#00000000'
+VERIFY='#f9c74fee'
+WRONG='#e06c75ee'
+TEXT='#eeeeeeee'
+UNDERLINE='#eeeeee55'
+FONT='FantasqueSansM Nerd Font'
+
+# no-op if no notification daemon (e.g. dunst) is running
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send -t 4000 -u low "$1" "$2" 2>/dev/null
+}
+
+i3lock --nofork \
+  --insidever-color=$BLANK --ringver-color=$VERIFY \
+  --insidewrong-color=$BLANK --ringwrong-color=$WRONG \
+  --inside-color=$BLANK --ring-color=$BLANK \
+  --line-color=$BLANK --separator-color=$BLANK \
+  --keyhl-color=$TEXT --bshl-color=$WRONG \
+  --bar-indicator --bar-color=$UNDERLINE --bar-pos="ix-200:iy+110" --bar-total-width=400 \
+  --bar-base-width=2 --bar-max-height=4 --bar-count=12 \
+  --verif-color=$VERIFY --wrong-color=$WRONG --time-color=$TEXT --date-color=$TEXT --layout-color=$TEXT \
+  --time-size=110 --date-size=36 --verif-size=36 --wrong-size=36 \
+  --date-pos="tx:ty+70" \
+  --time-font="$FONT" --date-font="$FONT" --verif-font="$FONT" --wrong-font="$FONT" --layout-font="$FONT" \
+  --blur 12 --clock --indicator \
+  --time-str="%H:%M:%S" --date-str="%A, %d %B" &
+
+LOCKPID=$!
+
+(
+  while kill -0 "$LOCKPID" 2>/dev/null; do
+    if fprintd-verify 2>/tmp/fprintd-lock.log | grep -q "verify-match"; then
+      notify "Nospiedums nolasīts ✓" ""
+      kill "$LOCKPID" 2>/dev/null
+      break
+    fi
+    sleep 0.3
+  done
+) &
+WATCHERPID=$!
+
+wait "$LOCKPID" 2>/dev/null
+# kill fprintd-verify too, or an orphan keeps the sensor claimed for every later lock
+kill "$WATCHERPID" 2>/dev/null
+pkill -x -u "$(id -u)" fprintd-verify 2>/dev/null
