@@ -1,0 +1,174 @@
+#!/home/atis/.local/share/stt/venv/bin/python
+# Live dictation: `stt` asks the language via dmenu and starts; `stt` again stops
+# (`stt fi|lv|en` skips the menu). Whisper runs on the NPU in `stt daemon`, which
+# records, re-transcribes the growing phrase every pass and types each word once
+# two passes agree on it (~1 s behind speech). A pause ends the phrase.
+# The first `stt` starts the daemon itself; it records while the model loads.
+import os, socket, subprocess, sys, threading, time
+
+RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+SOCK = f"{RUN}/stt.sock"
+DATA = os.path.expanduser("~/.local/share/stt")
+MODEL = f"{DATA}/whisper-large-v3-turbo-int8-ov"  # same WER as large-v3 on FLEURS lv/fi, 3x faster
+DEVICE = os.environ.get("STT_DEVICE", "NPU")
+MENU = {"latvian": "lv", "finnish": "fi", "english": "en"}  # same style as the kbd menu
+REC = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", "-"]
+SR = 16000
+# Tuning knobs: mic-dependent. Raise SPEECH_RMS if room noise gets transcribed,
+# lower it if quiet words are dropped.
+SPEECH_RMS = 0.01    # 0.1 s frame louder than this counts as speech (~-40 dBFS)
+PAUSE = 0.8          # seconds of quiet that end a phrase
+MAX_PHRASE = 20      # seconds; ponytail: hard cut can split a word, cut at the quietest frame if it bites
+
+
+def notify(msg, ms=2000):
+    subprocess.run(["notify-send", "-t", str(ms), "-h", "string:x-dunst-stack-tag:stt", "stt", msg])
+
+
+def type_text(text):
+    subprocess.run(["xdotool", "type", "--clearmodifiers", "--delay", "2", "--", text])
+
+
+def dictate(lang, stop, model):
+    rec = subprocess.Popen(REC, stdout=subprocess.PIPE)
+    try:
+        _loop(lang, stop, model, rec)
+    except Exception as e:  # never leave the session silently dead
+        print(f"dictate failed: {e!r}", flush=True)
+        notify(f"error: {e}"[:200], 10000)
+    finally:
+        rec.terminate()  # never leave pw-record running
+
+
+def _loop(lang, stop, model, rec):
+    import queue, numpy as np
+    q = queue.Queue()
+    reader = threading.Thread(target=lambda: [q.put(b) for b in iter(lambda: rec.stdout.read(3200), b"")])
+    reader.start()
+    notify(f"● live ({lang}), Super+U to stop", 600000)
+    buf = np.zeros(0, np.float32)
+    done, prev, context = [], [], ""  # typed words of this phrase, last hypothesis, anything typed yet
+
+    def drain():
+        nonlocal buf
+        parts = [buf]
+        while not q.empty():
+            parts.append(np.frombuffer(q.get(), np.int16).astype(np.float32) / 32768)
+        buf = np.concatenate(parts)
+
+    def loud():  # per 0.1 s frame: speech or not
+        n = len(buf) // 1600
+        return np.sqrt((buf[:n * 1600].reshape(n, 1600) ** 2).mean(1)) > SPEECH_RMS
+
+    def emit(words):
+        nonlocal context
+        if words:
+            text = " ".join(words)
+            type_text((" " if context else "") + text)
+            context = text
+
+    def hypothesis():
+        cfg = model["pipe"].get_generation_config()
+        cfg.language, cfg.task = f"<|{lang}|>", "transcribe"  # no initial_prompt: overflows the NPU's static decoder
+        return model["pipe"].generate(buf.tolist(), cfg).texts[0].split()
+
+    talking = False
+    while True:
+        stopping = stop.is_set()
+        if stopping:
+            rec.terminate(); reader.join()
+        elif not talking:  # while talking, a pass (~0.5 s) is the wait
+            time.sleep(0.2)
+        drain()
+        if "pipe" not in model:
+            if stopping: model["ready"].wait()
+            else: continue
+        speech = loud()
+        talking = speech.any()
+        if not speech.any():  # nothing said yet: keep a short tail, don't feed Whisper silence
+            buf = buf[-SR // 2:]
+            if stopping: break
+            continue
+        words = hypothesis()
+        agreed = os.path.commonprefix([words, prev])  # works on lists: words both passes agree on
+        pause = len(speech) >= PAUSE * 10 and not speech[-int(PAUSE * 10):].any()
+        if stopping or pause or len(buf) > MAX_PHRASE * SR:  # phrase over: type the rest
+            emit(words[len(done):])
+            buf, done, prev = buf[-SR // 2:] if pause else np.zeros(0, np.float32), [], []
+            if stopping: break
+        else:
+            if len(buf) > 2 * SR:  # phrase start: passes on <1.5 s of speech agree on wrong words ("I have" -> "you")
+                emit(agreed[len(done):]); done += agreed[len(done):]
+            prev = words
+    notify("stopped")
+
+
+def daemon():
+    try: os.unlink(SOCK)
+    except FileNotFoundError: pass
+    srv = socket.socket(socket.AF_UNIX); srv.bind(SOCK); srv.listen()  # bind first: record during load
+    model = {"ready": threading.Event()}
+
+    def load():
+        import openvino_genai as ov_genai
+        try:
+            model["pipe"] = ov_genai.WhisperPipeline(MODEL, DEVICE, CACHE_DIR=f"{DATA}/cache")
+        except RuntimeError as e:  # e.g. NPU not visible: session predates the render group
+            print(f"{DEVICE} failed, using GPU: {e}", flush=True)
+            notify(f"{DEVICE} unavailable, using GPU")
+            model["pipe"] = ov_genai.WhisperPipeline(MODEL, "GPU", CACHE_DIR=f"{DATA}/cache")
+        model["ready"].set(); print("ready", flush=True)
+    threading.Thread(target=load, daemon=True).start()
+
+    session, stop = None, threading.Event()
+    while True:
+        conn, _ = srv.accept()
+        with conn:
+            cmd = conn.recv(64).decode().split()
+            active = session is not None and session.is_alive()
+            if cmd == ["stop"]:
+                if active: stop.set()
+                conn.sendall(b"stopped" if active else b"idle")
+            elif len(cmd) == 2 and cmd[0] == "start" and cmd[1] in MENU.values() and not active:
+                stop = threading.Event()
+                session = threading.Thread(target=dictate, args=(cmd[1], stop, model), daemon=True)
+                session.start()
+                conn.sendall(b"ok")
+            # anything else (empty, malformed): ignore, never crash the daemon
+
+
+def ask(msg, tries=50):  # a fresh daemon binds the socket within ~1 s
+    for _ in range(tries):
+        try:
+            s = socket.socket(socket.AF_UNIX); s.connect(SOCK); break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        return None
+    with s:
+        s.sendall(msg.encode()); s.shutdown(socket.SHUT_WR)
+        return s.recv(64).decode()
+
+
+def toggle(lang):
+    state = ask("stop", tries=1)  # None: no daemon, or a stale socket from a dead one
+    if state == "stopped":
+        return
+    lang = lang or MENU.get(subprocess.run(
+        ["dmenu", "-i", "-p", "stt:", "-fn", "Fantasque Sans Mono:size=14", "-nb", "#1d1f21",
+         "-nf", "#eeeeee", "-sb", "#040707", "-sf", "#eeeeee"],
+        input="\n".join(MENU), capture_output=True, text=True).stdout.strip())
+    if not lang:
+        return
+    if state is None:
+        subprocess.Popen([sys.argv[0], "daemon"], start_new_session=True,
+                         stdout=open(f"{DATA}/daemon.log", "a"), stderr=subprocess.STDOUT)
+    if ask(f"start {lang}") != "ok":
+        notify("daemon did not start, see ~/.local/share/stt/daemon.log")
+
+
+if __name__ == "__main__":
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    if arg not in (None, "fi", "lv", "en", "daemon"):
+        sys.exit("usage: stt [fi|lv|en|daemon]")
+    daemon() if arg == "daemon" else toggle(arg)

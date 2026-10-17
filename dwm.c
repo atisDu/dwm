@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -110,7 +111,7 @@ struct Client {
 	int basew, baseh, incw, inch, maxw, maxh, minw, minh;
 	int bw, oldbw;
 	unsigned int tags;
-	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen;
+	int isfixed, isfloating, iscentered, isurgent, neverfocus, oldstate, isfullscreen;
 	Client *next;
 	Client *snext;
 	Monitor *mon;
@@ -156,7 +157,9 @@ typedef struct {
 	const char *title;
 	unsigned int tags;
 	int isfloating;
+	int iscentered;
 	int monitor;
+	int floatw, floath; /* 0 = keep client's size */
 } Rule;
 
 typedef struct Systray   Systray;
@@ -232,6 +235,7 @@ static void fullscreen(const Arg *arg);
 static void setlayout(const Arg *arg);
 static void setmfact(const Arg *arg);
 static void setup(void);
+static void sighup(int unused);
 static void seturgent(Client *c, int urg);
 static void showhide(Client *c);
 static void sigchld(int unused);
@@ -241,6 +245,7 @@ static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *);
 static void togglebar(const Arg *arg);
+static void togglezen(const Arg *arg);
 static void togglefloating(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
@@ -277,6 +282,7 @@ static int screen;
 static int sw, sh;           /* X display screen geometry width, height */
 static int bh, blw = 0;      /* bar geometry */
 static int lrpad;            /* sum of left and right padding for text */
+static int zen = 0;          /* zen mode: minimal bar, no status/title/layout */
 static int (*xerrorxlib)(Display *, XErrorEvent *);
 static unsigned int numlockmask = 0;
 static void (*handler[LASTEvent]) (XEvent *) = {
@@ -298,6 +304,7 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 };
 static Atom wmatom[WMLast], netatom[NetLast], xatom[XLast];
 static int running = 1;
+static int restart = 0;
 static Cur *cursor[CurLast];
 static Clr **scheme;
 static Display *dpy;
@@ -323,6 +330,7 @@ applyrules(Client *c)
 
 	/* rule matching */
 	c->isfloating = 0;
+	c->iscentered = 0;
 	c->tags = 0;
 	XGetClassHint(dpy, c->win, &ch);
 	class    = ch.res_class ? ch.res_class : broken;
@@ -335,6 +343,9 @@ applyrules(Client *c)
 		&& (!r->instance || strstr(instance, r->instance)))
 		{
 			c->isfloating = r->isfloating;
+			c->iscentered = r->iscentered;
+			if (r->floatw) c->w = r->floatw;
+			if (r->floath) c->h = r->floath;
 			c->tags |= r->tags;
 			for (m = mons; m && m->num != r->monitor; m = m->next);
 			if (m)
@@ -799,6 +810,25 @@ drawbar(Monitor *m)
 	if(showsystray && m == systraytomon(m) && !systrayonleft)
 		stw = getsystraywidth();
 
+	if (zen) { /* minimal bar: selected tags left, HH:MM right */
+		time_t now = time(NULL);
+		char clk[6];
+
+		resizebarwin(m);
+		drw_setscheme(drw, scheme[SchemeNorm]);
+		drw_rect(drw, 0, 0, m->ww, bh, 1, 1);
+		for (x = 0, i = 0; i < LENGTH(tags); i++)
+			if (m->tagset[m->seltags] & 1 << i)
+				x = drw_text(drw, x, 0, TEXTW(tags[i]), bh, lrpad / 2, tags[i], 0);
+		/* redrawn by slstatus' once-a-second root name change, so no timer needed */
+		if (m == selmon && strftime(clk, sizeof clk, "%H:%M", localtime(&now))) {
+			w = TEXTW(clk);
+			drw_text(drw, m->ww - stw - w, 0, w, bh, lrpad / 2, clk, 0);
+		}
+		drw_map(drw, m->barwin, 0, 0, m->ww - stw, bh);
+		return;
+	}
+
 	/* draw status first so it can be overdrawn by tags later */
 	if (m == selmon) { /* status is only drawn on selected monitor */
 		drw_setscheme(drw, scheme[SchemeNorm]);
@@ -1167,6 +1197,10 @@ manage(Window w, XWindowAttributes *wa)
 	c->y = MAX(c->y, ((c->mon->by == c->mon->my) && (c->x + (c->w / 2) >= c->mon->wx)
 		&& (c->x + (c->w / 2) < c->mon->wx + c->mon->ww)) ? bh : c->mon->my);
 	c->bw = borderpx;
+	if (c->iscentered) {
+		c->x = c->mon->wx + (c->mon->ww - WIDTH(c)) / 2;
+		c->y = c->mon->wy + (c->mon->wh - HEIGHT(c)) / 2;
+	}
 
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
@@ -1383,6 +1417,7 @@ propertynotify(XEvent *e)
 void
 quit(const Arg *arg)
 {
+	restart = arg->i;
 	running = 0;
 }
 
@@ -1720,6 +1755,13 @@ setmfact(const Arg *arg)
 }
 
 void
+sighup(int unused)
+{
+	Arg a = {.i = 1};
+	quit(&a);
+}
+
+void
 setup(void)
 {
 	int i;
@@ -1833,6 +1875,7 @@ showhide(Client *c)
 void
 sigchld(int unused)
 {
+	signal(SIGHUP, sighup);
 	if (signal(SIGCHLD, sigchld) == SIG_ERR)
 		die("can't install SIGCHLD handler:");
 	while (0 < waitpid(-1, NULL, WNOHANG));
@@ -1898,6 +1941,29 @@ tile(Monitor *m)
 			if (ty + HEIGHT(c) < m->wh)
 				ty += HEIGHT(c);
 		}
+}
+
+void
+togglezen(const Arg *arg)
+{
+	int pad = 0;
+
+	zen = !zen;
+	drawbars();
+	/* kitty padding is in pts, client widths in px. Convert with Xft.dpi, which is what
+	 * kitty's pt_to_px uses -- DisplayWidthMM often reports the bogus 96dpi fallback.
+	 * ponytail: sized from the focused client at toggle time and applied to every
+	 * kitty instance; retile after toggling and it goes stale, hit Mod+Shift+Z twice. */
+	if (zen && selmon->sel && selmon->sel->w > zenwidth) {
+		char *xftdpi = XGetDefault(dpy, "Xft", "dpi");
+		int dpi = xftdpi ? atoi(xftdpi) : 0;
+
+		if (dpi <= 0) /* no Xft.dpi set: fall back to the physical screen size */
+			dpi = (int)((long)sw * 254 / (10L * DisplayWidthMM(dpy, screen)));
+		pad = (selmon->sel->w - zenwidth) / 2 * 72 / dpi;
+	}
+	snprintf(zenpad, sizeof zenpad, "%d", pad);
+	spawn(&(Arg){.v = zen ? zenoncmd : zenoffcmd});
 }
 
 void
@@ -2516,5 +2582,7 @@ main(int argc, char *argv[])
 	run();
 	cleanup();
 	XCloseDisplay(dpy);
+	if (restart)
+		execvp(argv[0], argv);
 	return EXIT_SUCCESS;
 }

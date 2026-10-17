@@ -1,0 +1,23 @@
+#!/bin/bash
+# On battery: power-saver at 25%, critical dunst warning once below 10%.
+# Back to balanced when plugged in (only if we switched it). Started from ~/.xinitrc.
+
+bat=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
+[[ $bat ]] || exit 0
+warned=0 saver=0
+while sleep 60; do
+	cap=$(<"$bat/capacity") status=$(<"$bat/status")
+	if [[ $status == Discharging ]]; then
+		if ((cap <= 25 && !saver)) && powerprofilesctl set power-saver; then
+			saver=1
+			notify-send -a battery "Battery $cap%" "Switched to power saving"
+		fi
+		if ((cap < 10 && !warned)); then
+			notify-send -a battery -u critical "Battery low" "$cap% left, plug in"
+			warned=1
+		fi
+	else
+		((saver)) && powerprofilesctl set balanced && notify-send -a battery "Plugged in" "Back to balanced"
+		warned=0 saver=0
+	fi
+done

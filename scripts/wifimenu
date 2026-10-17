@@ -1,0 +1,45 @@
+#!/bin/sh
+# dmenu wifi manager: pick a network to connect (asks for a password if needed),
+# pick the connected one to disconnect, or toggle the radio. Bound to Mod+Shift+r in dwm.
+# Connect/disconnect notifications come from netnotify; this only reports failures.
+mydmenu() {
+  dmenu -i -l 12 -fn 'Fantasque Sans Mono:size=14' -nb '#1d1f21' -nf '#eeeeee' -sb '#040707' -sf '#eeeeee' "$@"
+}
+note() { notify-send -t 3000 wifi "$1"; }
+
+if [ "$(nmcli radio wifi)" != enabled ]; then
+  [ "$(printf 'ieslēgt wifi\n' | mydmenu -p 'wifi (izslēgts):')" = 'ieslēgt wifi' ] && nmcli radio wifi on
+  exit
+fi
+
+# "●  73%  WPA2  SSID" per network, strongest first; SSID last so colons in it survive
+list=$(nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan auto |
+  LC_ALL=C sort -t: -k1,1r -k2,2nr | awk -F: -v OFS=: '$4 != "" && !seen[substr($0, index($0, $4))]++ { gsub(/ /, "/", $3); if ($3 == "" || $3 == "--") $3 = "atvērts"; print }' |
+  sed 's/^\*:/● :/; s/^ :/○ :/; s/^\(. \):\([0-9]*\):\([^:]*\):/\1 \2%  \3  /; s/\\:/:/g')
+choice=$(printf '%s\nmeklēt vēlreiz\nizslēgt wifi\n' "$list" | mydmenu -p 'wifi:')
+
+case "$choice" in
+'') exit ;;
+'izslēgt wifi') nmcli radio wifi off ;;
+'meklēt vēlreiz') nmcli dev wifi rescan 2>/dev/null; sleep 3; exec "$0" ;;
+*)
+  ssid=$(printf '%s' "$choice" | sed 's/^. *[0-9]*%  [^ ]*  //')
+  case "$choice" in
+  ●*) nmcli con down id "$ssid" >/dev/null || note "neizdevās atvienot $ssid" ;;
+  *)
+    if nmcli -t -f NAME con show | grep -qxF "$ssid"; then
+      nmcli con up id "$ssid" >/dev/null 2>&1 || note "neizdevās pieslēgties $ssid"
+    elif printf '%s' "$choice" | grep -q '  atvērts  '; then
+      nmcli dev wifi connect "$ssid" >/dev/null 2>&1 || note "neizdevās pieslēgties $ssid"
+    else
+      # text colour = background so the password isn't shown on screen
+      pw=$(mydmenu -nf '#1d1f21' -p "$ssid parole:" </dev/null)
+      [ -n "$pw" ] || exit
+      nmcli dev wifi connect "$ssid" password "$pw" >/dev/null 2>&1 ||
+        { note "neizdevās pieslēgties $ssid"; nmcli con delete id "$ssid" >/dev/null 2>&1; }
+    fi
+    ;;
+  esac
+  ;;
+esac
+pkill -USR1 slstatus

@@ -1,0 +1,57 @@
+#!/bin/sh
+# dmenu bluetooth manager: pick a paired device to toggle its connection,
+# or scan / pair / forget / power. Bound to Mod+Shift+b in dwm.
+mydmenu() {
+  dmenu -i -l 12 -fn 'Fantasque Sans Mono:size=14' -nb '#1d1f21' -nf '#eeeeee' -sb '#040707' -sf '#eeeeee' "$@"
+}
+note() { notify-send -t 3000 bluetooth "$1"; }
+mac_of() { printf '%s\n' "$1" | grep -oE '([0-9A-F]{2}:){5}[0-9A-F]{2}'; }
+
+# "Device MAC Name" -> "Name  MAC", connected ones marked
+list_devices() {
+  connected=$(bluetoothctl devices Connected | cut -d' ' -f2)
+  bluetoothctl devices "$@" | while read -r _ mac name; do
+    case "$connected" in *"$mac"*) mark='●' ;; *) mark='○' ;; esac
+    printf '%s %s  %s\n' "$mark" "$name" "$mac"
+  done
+}
+
+if bluetoothctl show | grep -q 'Powered: yes'; then
+  choice=$( { list_devices Paired | LC_ALL=C sort -r; printf 'meklēt jaunas ierīces\naizmirst ierīci\nizslēgt\n'; } | mydmenu -p 'bt:')
+else
+  choice=$(printf 'ieslēgt\n' | mydmenu -p 'bt (izslēgts):')
+fi
+
+case "$choice" in
+'') exit ;;
+'ieslēgt')  bluetoothctl power on >/dev/null && note 'ieslēgts' ;;
+'izslēgt') bluetoothctl power off >/dev/null && note 'izslēgts' ;;
+'aizmirst ierīci')
+  mac=$(mac_of "$(list_devices Paired | mydmenu -p 'aizmirst:')")
+  [ -n "$mac" ] && [ "$(printf 'nē\njā\n' | mydmenu -p "aizmirst $mac — tiešām?")" = jā ] &&
+    bluetoothctl remove "$mac" >/dev/null && note "aizmirsts $mac"
+  ;;
+'meklēt jaunas ierīces')
+  note 'meklē…'
+  # keep discovery running through the menu + pairing, or bluez drops unpaired devices
+  bluetoothctl --timeout 60 scan on >/dev/null & scan=$!
+  sleep 8
+  paired=$(bluetoothctl devices Paired | cut -d' ' -f2)
+  mac=$(mac_of "$(list_devices | grep -vF "${paired:-none}" | mydmenu -p 'savienot pārī:')")
+  if [ -n "$mac" ]; then
+    note "savieno pārī $mac…"
+    bluetoothctl pair "$mac" >/dev/null && bluetoothctl trust "$mac" >/dev/null &&
+      bluetoothctl connect "$mac" >/dev/null && note "savienots pārī un pievienots $mac" || note "neizdevās savienot pārī $mac"
+  fi
+  kill "$scan" 2>/dev/null
+  ;;
+*)
+  mac=$(mac_of "$choice") name=$(printf '%s' "$choice" | sed 's/^. //; s/  [0-9A-F:]*$//')
+  if bluetoothctl info "$mac" | grep -q 'Connected: yes'; then
+    bluetoothctl disconnect "$mac" >/dev/null && note "atvienots $name" || note "neizdevās atvienot $name"
+  else
+    bluetoothctl connect "$mac" >/dev/null && note "pievienots $name" || note "neizdevās pievienot $name"
+  fi
+  ;;
+esac
+pkill -USR1 slstatus

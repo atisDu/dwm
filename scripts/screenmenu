@@ -1,0 +1,43 @@
+#!/bin/sh
+# dmenu display switcher: layout, plus a per-screen scale that sticks.
+# X11 has a single global DPI, so the scale actually applied is the primary
+# screen's; the others are remembered for when they become primary.
+# Bound to XF86Display in dwm.
+HOTPLUG="$HOME/git/dwm/scripts/monitor-hotplug"
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/screen-scale
+INTERNAL=eDP-1
+INTMODE="--mode 2880x1800 --rate 120"
+EXTERNAL=HDMI-1
+EXTMODE="--mode 1920x1080"
+
+mydmenu() {
+  dmenu -i -l 12 -fn 'Fantasque Sans Mono:size=14' -nb '#1d1f21' -nf '#eeeeee' -sb '#040707' -sf '#eeeeee' "$@"
+}
+primary() { xrandr --query | awk '/ connected primary/{print $1}'; }
+
+case $(printf 'tikai iebūvētais\npagarināt\ntikai HDMI\nmērogs…\n' | mydmenu -p 'ekrāns:') in
+'tikai iebūvētais')
+  xrandr --output $EXTERNAL --off --output $INTERNAL $INTMODE --primary && "$HOTPLUG" dpi $INTERNAL
+  ;;
+pagarināt)
+  xrandr --output $INTERNAL $INTMODE --primary --output $EXTERNAL $EXTMODE --above $INTERNAL &&
+    "$HOTPLUG" dpi $INTERNAL
+  ;;
+'tikai HDMI')
+  xrandr --output $EXTERNAL $EXTMODE --primary --output $INTERNAL --off && "$HOTPLUG" dpi $EXTERNAL
+  ;;
+'mērogs…')
+  out=$(xrandr --query | awk '/ connected/{print $1}' | mydmenu -p 'mērogs kuram ekrānam:')
+  [ -n "$out" ] || exit
+  pct=$(printf '100\n125\n150\n160\n175\n200\n' | mydmenu -p "$out mērogs %:")
+  [ -n "$pct" ] || exit
+  { [ -f "$CONF" ] && grep -v "^$out " "$CONF"; printf '%s %s\n' "$out" "$pct"; } > "$CONF.tmp" &&
+    mv "$CONF.tmp" "$CONF"
+  if [ "$out" = "$(primary)" ]; then
+    "$HOTPLUG" dpi "$out"
+    notify-send -t 3000 ekrāns "$out: $pct%"
+  else
+    notify-send -t 3000 ekrāns "$out: $pct% (stāsies spēkā, kad būs galvenais ekrāns)"
+  fi
+  ;;
+esac

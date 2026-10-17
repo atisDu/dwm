@@ -1,0 +1,27 @@
+#!/bin/bash
+# Notify via dunst on wifi and bluetooth changes. Started from ~/.xinitrc.
+
+nmcli monitor | while read -r line; do
+	case $line in
+		*"is now the primary connection")
+			name=${line#\'}
+			notify-send -a network "Wi-Fi" "Connected to ${name%%\' is now*}" ;;
+		"There's no primary connection"*) notify-send -a network "Wi-Fi" "Disconnected" ;;
+	esac
+done &
+
+# bluetoothctl only prints events while its stdin stays open
+sleep infinity | stdbuf -oL bluetoothctl | sed -u 's/\x1b\[[0-9;]*m//g; s/\r//g' | while read -r line; do
+	case $line in
+		*"CHG] Device "*" Connected: "*)
+			mac=$(awk '{print $2}' <<<"${line#*CHG] }")
+			name=$(bluetoothctl info "$mac" | sed -n 's/^\s*Name: //p')
+			[[ $line == *yes ]] && state=Connected || state=Disconnected
+			notify-send -a bluetooth "Bluetooth" "$state: ${name:-$mac}" ;;
+		*"CHG] Controller "*" Powered: "*)
+			[[ $line == *yes ]] && state=on || state=off
+			notify-send -a bluetooth "Bluetooth" "Turned $state" ;;
+	esac
+done &
+
+wait

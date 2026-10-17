@@ -1,0 +1,84 @@
+#!/bin/sh
+# External monitor plugged in -> external only, and switch the X server's DPI to
+# suit it. The 2880x1800 panel wants ~154; a 24" 1080p wants ~102, so without
+# this every UI on the external screen renders ~1.5x too big.
+#
+# xrandr --scale would fix it instantly for running apps, but the xe driver
+# scans out garbage under a RandR transform on this machine, so: DPI it is.
+# Cost: only apps started after the switch pick up the new size. dwm restarts
+# itself (SIGHUP) and kitty reloads (SIGUSR1); Firefox needs a restart.
+INTERNAL=eDP-1
+INTMODE="--mode 2880x1800 --rate 120"   # --auto would pick the preferred 60Hz
+EXTMODE="--mode 1920x1080"              # --auto picks the preferred mode, not always this
+DPI_INTERNAL=154                        # taste, not physics: 2880x1800 is ~243 real DPI
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/screen-scale   # "OUTPUT PERCENT" per line, from screenmenu
+
+# Per-output DPI: the saved scale % of 96 if screenmenu set one, else the taste
+# value for the internal panel, else the monitor's real DPI from its mm size.
+dpi_of() {
+	pct=$([ -f "$CONF" ] && awk -v o="$1" '$1==o{print $2}' "$CONF")
+	[ -n "$pct" ] && { echo $((pct * 96 / 100)); return; }
+	[ "$1" = "$INTERNAL" ] && { echo $DPI_INTERNAL; return; }
+	line=$(xrandr --query | grep "^$1 connected")
+	px=$(echo "$line" | grep -oP '\d+(?=x\d+\+)' | head -1)
+	mm=$(echo "$line" | grep -oP '\d+(?=mm x)')
+	awk -v p="$px" -v m="$mm" 'BEGIN{print (p&&m) ? int(p*25.4/m + 0.5) : 96}'
+}
+
+setdpi() {
+	# GTK takes its DPI from XSETTINGS (overrides settings.ini) and rescales live
+	xs=${XDG_CONFIG_HOME:-$HOME/.config}/xsettingsd/xsettingsd.conf
+	mkdir -p "${xs%/*}" && touch "$xs"
+	sed -i '/^\(Xft\/DPI\|Gdk\/UnscaledDPI\|Gtk\/CursorThemeSize\) /d' "$xs"
+	printf 'Xft/DPI %s\nGdk/UnscaledDPI %s\nGtk/CursorThemeSize %s\n' \
+		$(($1 * 1024)) $(($1 * 1024)) $(($1 * 24 / 96)) >> "$xs"
+	pkill -HUP -x xsettingsd
+	# Same hand travel per UI element: scale pointer motion by this DPI over the
+	# panel's. Accelerated (relative) devices only - a touchscreen's matrix is
+	# its screen mapping. ponytail: mice plugged in later keep the old matrix.
+	f=$(awk -v a="$1" -v b="$(dpi_of "$INTERNAL")" 'BEGIN{print a/b}')
+	for id in $(xinput list --id-only); do
+		xinput list-props "$id" 2>/dev/null | grep -q 'libinput Accel Speed (' &&
+			xinput set-prop "$id" 'Coordinate Transformation Matrix' "$f" 0 0 0 "$f" 0 0 0 1
+	done
+
+	[ "$1" = "$(xrdb -query | awk -F'[:\t ]+' '/^Xft.dpi/{print $2}')" ] && return
+	printf 'Xft.dpi: %s\nXcursor.size: %s\n' "$1" "$(($1 * 24 / 96))" | xrdb -merge
+	# Only HUP a dwm that actually has the handler - an older build would just
+	# die, taking the X session with it.
+	pid=$(pgrep -x dwm) && cmp -s "/proc/$pid/exe" "$HOME/git/dwm/dwm" && kill -HUP "$pid"
+	pkill -USR1 -x kitty         # config reload -> recomputes font px from DPI
+}
+
+apply() {
+	ext=$(xrandr --query | awk '/ connected/ && $1 != "'"$INTERNAL"'" {print $1; exit}')
+	off=$(xrandr --query | awk '/ (dis)?connected/ {print $1}' | grep -vx "$INTERNAL" | grep -vx "$ext")
+
+	if [ -z "$ext" ]; then
+		set -- --output "$INTERNAL" $INTMODE --primary
+		out=$INTERNAL
+	else
+		# turn it on first: xrandr reports physical size only for an active output
+		mode=$EXTMODE
+		xrandr --output "$ext" $mode --primary 2>/dev/null ||
+			{ mode=--auto; xrandr --output "$ext" --auto --primary; }
+		set -- --output "$ext" $mode --primary --pos 0x0 --output "$INTERNAL" --off
+		out=$ext
+	fi
+	for o in $off; do set -- "$@" --output "$o" --off; done
+	xrandr "$@" && setdpi "$(dpi_of "$out")"
+}
+
+case "$1" in
+	dpi) setdpi "$(dpi_of "$2")"; exit ;;   # screenmenu changed the layout or the scale
+	watch) ;;
+	*) apply; exit ;;
+esac
+
+# ponytail: 2s sysfs poll instead of a udev rule - no root, no XAUTHORITY dance
+while :; do
+	now=$(cat /sys/class/drm/card*/status)
+	[ "$now" = "$was" ] || { sleep 1; apply; }
+	was=$now
+	sleep 2
+done

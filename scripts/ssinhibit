@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# org.freedesktop.ScreenSaver Inhibit/UnInhibit for dwm.
+# Without an owner for this name, Firefox falls back to its own X11
+# screensaver code during video playback, which crashed it with BadGC.
+# While any inhibit is held, X screensaver (and so xss-lock + DPMS) is suspended.
+import ctypes, itertools
+from gi.repository import Gio, GLib
+
+x11 = ctypes.CDLL("libX11.so.6")
+xss = ctypes.CDLL("libXss.so.1")
+x11.XOpenDisplay.restype = ctypes.c_void_p
+dpy = x11.XOpenDisplay(None)
+if not dpy:
+    raise SystemExit("ssinhibit: cannot open X display")
+
+XML = """<node><interface name="org.freedesktop.ScreenSaver">
+<method name="Inhibit"><arg type="s" direction="in"/><arg type="s" direction="in"/>
+<arg type="u" direction="out"/></method>
+<method name="UnInhibit"><arg type="u" direction="in"/></method>
+</interface></node>"""
+
+cookies = {}   # cookie -> sender
+watches = {}   # sender -> watch id
+next_cookie = itertools.count(1)
+
+
+def apply():
+    xss.XScreenSaverSuspend(ctypes.c_void_p(dpy), bool(cookies))
+    x11.XFlush(ctypes.c_void_p(dpy))
+
+
+def drop_sender(sender):
+    for c in [c for c, s in cookies.items() if s == sender]:
+        del cookies[c]
+    if sender in watches:
+        Gio.bus_unwatch_name(watches.pop(sender))
+    apply()
+
+
+def call(conn, sender, path, iface, method, params, inv):
+    if method == "Inhibit":
+        c = next(next_cookie)
+        cookies[c] = sender
+        if sender not in watches:  # release if the app dies holding it
+            watches[sender] = Gio.bus_watch_name_on_connection(
+                conn, sender, Gio.BusNameWatcherFlags.NONE, None,
+                lambda _c, name: drop_sender(name))
+        apply()
+        inv.return_value(GLib.Variant("(u)", (c,)))
+    elif method == "UnInhibit":
+        cookies.pop(params.unpack()[0], None)
+        apply()
+        inv.return_value(None)
+
+
+def on_bus(conn, _name):
+    iface = Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0]
+    for path in ("/org/freedesktop/ScreenSaver", "/ScreenSaver"):
+        conn.register_object(path, iface, call, None, None)
+
+
+Gio.bus_own_name(Gio.BusType.SESSION, "org.freedesktop.ScreenSaver",
+                 Gio.BusNameOwnerFlags.NONE, on_bus, None,
+                 lambda *_: print("ssinhibit: name taken/lost"))
+GLib.MainLoop().run()
